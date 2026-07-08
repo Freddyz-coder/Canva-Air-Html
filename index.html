@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Air Canvas</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  /* ── Reset & base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0a0b10;
+    --surface:  #12141f;
+    --border:   #1f2235;
+    --text:     #cdd3f0;
+    --muted:    #4a5070;
+    --accent:   #5b8cff;
+    --danger:   #ff4f6e;
+    --success:  #3fffa2;
+    --font-ui:  'Inter', 'Segoe UI', sans-serif;
+    --font-mono:'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    grid-template-rows: 48px 1fr 36px;
+    grid-template-areas:
+      "header header"
+      "sidebar main"
+      "footer footer";
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    grid-area: header;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 20px;
+  }
+  header .logo {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: .5px;
+    color: #fff;
+  }
+  header .logo span { color: var(--accent); }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background .4s;
+    margin-left: auto;
+  }
+  #status-dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  #status-label { font-size: 12px; color: var(--muted); font-family: var(--font-mono); }
+
+  /* ── Sidebar ── */
+  aside {
+    grid-area: sidebar;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    overflow-y: auto;
+  }
+  .panel-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  /* Mode badge */
+  #mode-badge {
+    display: inline-block;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    background: #1a1d2e;
+    color: var(--text);
+    border: 1px solid var(--border);
+    transition: all .2s;
+    width: 100%;
+    text-align: center;
+  }
+  #mode-badge.DRAW   { color: var(--success);  border-color: var(--success);  background: #0e2e22; }
+  #mode-badge.ERASE  { color: var(--danger);   border-color: var(--danger);   background: #2e0e18; }
+  #mode-badge.HOVER  { color: #ffe066;         border-color: #665800;         background: #2a2300; }
+  #mode-badge.CLEAR  { color: var(--accent);   border-color: var(--accent);   background: #0d1a40; }
+  #mode-badge.UNDO   { color: #c084fc;         border-color: #6b21a8;         background: #1e0d33; }
+
+  /* Color palette */
+  .palette {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 7px;
+  }
+  .swatch {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: transform .15s, border-color .15s, box-shadow .15s;
+    position: relative;
+  }
+  .swatch:hover { transform: scale(1.12); }
+  .swatch.active {
+    border-color: #fff;
+    box-shadow: 0 0 10px rgba(255,255,255,.35);
+    transform: scale(1.15);
+  }
+  .swatch .label {
+    display: none;
+    position: absolute;
+    bottom: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .swatch:hover .label { display: block; }
+
+  /* Brush slider */
+  .brush-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .brush-preview {
+    background: #fff;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: all .2s;
+  }
+  input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+
+  /* Toggles */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+  }
+  .toggle {
+    position: relative;
+    width: 36px; height: 20px;
+  }
+  .toggle input { display: none; }
+  .toggle-track {
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    background: var(--border);
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .toggle input:checked + .toggle-track { background: var(--accent); }
+  .toggle-thumb {
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    pointer-events: none;
+    transition: left .2s;
+  }
+  .toggle input:checked ~ .toggle-thumb { left: 19px; }
+
+  /* Action buttons */
+  .btn-row { display: flex; gap: 8px; }
+  .btn {
+    flex: 1;
+    padding: 7px 0;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: #1a1d2e;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+    font-family: var(--font-ui);
+  }
+  .btn:hover { background: #252840; border-color: var(--accent); color: #fff; }
+  .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* Gesture guide */
+  .gesture-list { display: flex; flex-direction: column; gap: 7px; }
+  .gesture-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .gesture-icon {
+    font-size: 18px;
+    width: 26px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  /* ── Main area ── */
+  main {
+    grid-area: main;
+    position: relative;
+    overflow: hidden;
+    background: #05060d;
+  }
+
+  /* Camera feed (background) */
+  #cam {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    opacity: .55;
+  }
+
+  /* Drawing canvas (foreground) */
+  #canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    cursor: none;
+  }
+
+  /* Cursor dot */
+  #cursor {
+    position: absolute;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    border: 2px solid #fff;
+    box-shadow: 0 0 8px rgba(255,255,255,.5);
+    transition: background .2s, box-shadow .2s;
+    display: none;
+  }
+
+  /* Toast */
+  #toast {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(60px);
+    background: #1a1d2e;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 18px;
+    font-size: 13px;
+    color: var(--text);
+    transition: transform .3s ease;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 10;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ── Footer ── */
+  footer {
+    grid-area: footer;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 20px;
+    font-size: 11px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  footer span { color: var(--text); }
+
+  @keyframes pulse-glow {
+    0%,100% { box-shadow: 0 0 6px currentColor; }
+    50%      { box-shadow: 0 0 18px currentColor; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">Air<span>Canvas</span></div>
+  <div id="status-label">disconnected</div>
+  <div id="status-dot"></div>
+</header>
+
+<!-- ── Sidebar ── -->
+<aside>
+
+  <div>
+    <div class="panel-label">Mode</div>
+    <div id="mode-badge">WAITING</div>
+  </div>
+
+  <div>
+    <div class="panel-label">Color</div>
+    <div class="palette" id="palette"></div>
+  </div>
+
+  <div>
+    <div class="panel-label">Brush size</div>
+    <div class="brush-row">
+      <div class="brush-preview" id="brush-dot"></div>
+      <input type="range" id="brush-slider" min="2" max="32" value="8"
+             oninput="setBrush(this.value)">
+      <span id="brush-val" style="font-size:12px;width:28px;text-align:right">8px</span>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel-label">Options</div>
+    <div class="toggle-row">
+      <span>Glow effect</span>
+      <label class="toggle">
+        <input type="checkbox" id="glow-toggle" checked onchange="glowOn=this.checked">
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+    </div>
+    <div class="toggle-row" style="margin-top:10px">
+      <span>Show camera</span>
+      <label class="toggle">
+        <input type="checkbox" id="cam-toggle" checked onchange="document.getElementById('cam').style.opacity=this.checked?.55:0">
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel-label">Actions</div>
+    <div class="btn-row">
+      <button class="btn" onclick="undoStroke()">↩ Undo</button>
+      <button class="btn danger" onclick="clearCanvas()">🗑 Clear</button>
+    </div>
+    <button class="btn" style="width:100%;margin-top:8px" onclick="saveCanvas()">💾 Save PNG</button>
+  </div>
+
+  <div>
+    <div class="panel-label">Gestures</div>
+    <div class="gesture-list">
+      <div class="gesture-item"><span class="gesture-icon">☝️</span><span>Index only → Draw</span></div>
+      <div class="gesture-item"><span class="gesture-icon">✌️</span><span>Index+Middle → Hover</span></div>
+      <div class="gesture-item"><span class="gesture-icon">🤙</span><span>Split ✌️ wide → Next color</span></div>
+      <div class="gesture-item"><span class="gesture-icon">✊</span><span>Fist → Erase</span></div>
+      <div class="gesture-item"><span class="gesture-icon">🖐</span><span>5 fingers → Clear all</span></div>
+      <div class="gesture-item"><span class="gesture-icon">👍</span><span>Thumb only → Undo</span></div>
+    </div>
+  </div>
+
+</aside>
+
+<!-- ── Main ── -->
+<main>
+  <img id="cam" alt="camera feed" />
+  <canvas id="canvas"></canvas>
+  <div id="cursor"></div>
+  <div id="toast"></div>
+</main>
+
+<!-- ── Footer ── -->
+<footer>
+  <div>FPS <span id="fps-val">--</span></div>
+  <div>Strokes <span id="stroke-count">0</span></div>
+  <div>Undo stack <span id="undo-count">0</span></div>
+  <div style="margin-left:auto">python server.py → localhost:5000</div>
+</footer>
+
+<script>
+// ── Colors ────────────────────────────────────────────────────────────────
+const COLORS = [
+  { hex: "#ff3b5c", rgb: [255,59,92],   name: "Red"    },
+  { hex: "#ff8c00", rgb: [255,140,0],   name: "Orange" },
+  { hex: "#ffe033", rgb: [255,224,51],  name: "Yellow" },
+  { hex: "#00e676", rgb: [0,230,118],   name: "Green"  },
+  { hex: "#00e5ff", rgb: [0,229,255],   name: "Cyan"   },
+  { hex: "#5b8cff", rgb: [91,140,255],  name: "Blue"   },
+  { hex: "#c084fc", rgb: [192,132,252], name: "Purple" },
+  { hex: "#ff80ab", rgb: [255,128,171], name: "Pink"   },
+  { hex: "#ffffff", rgb: [255,255,255], name: "White"  },
+];
+let colorIdx  = 0;
+let glowOn    = true;
+let brushSize = 8;
+let strokes   = 0;
+let undoStack = [];
+
+// Build palette
+const palette = document.getElementById("palette");
+COLORS.forEach((c, i) => {
+  const s = document.createElement("div");
+  s.className = "swatch" + (i === 0 ? " active" : "");
+  s.style.background = c.hex;
+  s.title = c.name;
+  s.innerHTML = `<span class="label">${c.name}</span>`;
+  s.onclick = () => setColor(i);
+  palette.appendChild(s);
+});
+
+function setColor(i) {
+  colorIdx = i;
+  document.querySelectorAll(".swatch").forEach((s, j) =>
+    s.classList.toggle("active", j === i));
+  document.getElementById("cursor").style.background = COLORS[i].hex;
+  document.getElementById("cursor").style.boxShadow = `0 0 10px ${COLORS[i].hex}`;
+}
+setColor(0);
+
+function setBrush(v) {
+  brushSize = parseInt(v);
+  document.getElementById("brush-val").textContent = v + "px";
+  const d = document.getElementById("brush-dot");
+  const size = Math.min(Math.max(brushSize, 4), 28);
+  d.style.width  = size + "px";
+  d.style.height = size + "px";
+}
+setBrush(8);
+
+// ── Canvas setup ──────────────────────────────────────────────────────────
+const canvasEl = document.getElementById("canvas");
+const ctx      = canvasEl.getContext("2d");
+let   prevX    = null, prevY = null;
+
+function resizeCanvas() {
+  const main = document.querySelector("main");
+  canvasEl.width  = main.clientWidth;
+  canvasEl.height = main.clientHeight;
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+function toPixel(nx, ny) {
+  return [nx * canvasEl.width, ny * canvasEl.height];
+}
+
+function drawStroke(x1, y1, x2, y2) {
+  const [r, g, b] = COLORS[colorIdx].rgb;
+  ctx.lineCap  = "round";
+  ctx.lineJoin = "round";
+
+  if (glowOn) {
+    // Outer glow
+    ctx.globalAlpha  = 0.18;
+    ctx.strokeStyle  = `rgb(${r},${g},${b})`;
+    ctx.lineWidth    = brushSize * 3.5;
+    ctx.shadowBlur   = 20;
+    ctx.shadowColor  = `rgb(${r},${g},${b})`;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+
+    // Inner glow
+    ctx.globalAlpha  = 0.35;
+    ctx.lineWidth    = brushSize * 1.8;
+    ctx.shadowBlur   = 10;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+
+  // Core stroke
+  ctx.globalAlpha  = 1;
+  ctx.strokeStyle  = `rgb(${r},${g},${b})`;
+  ctx.lineWidth    = brushSize;
+  ctx.shadowBlur   = glowOn ? 4 : 0;
+  ctx.shadowColor  = `rgb(${r},${g},${b})`;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+function eraseAt(x, y) {
+  ctx.globalAlpha  = 1;
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.beginPath();
+  ctx.arc(x, y, 40, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+}
+
+function undoStroke() {
+  if (undoStack.length === 0) return;
+  const img = undoStack.pop();
+  ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+  ctx.drawImage(img, 0, 0);
+  updateCounters();
+}
+
+function clearCanvas() {
+  undoStack.push(createSnapshot());
+  ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+  strokes = 0;
+  updateCounters();
+  showToast("Canvas cleared");
+}
+
+function createSnapshot() {
+  const snap = document.createElement("canvas");
+  snap.width = canvasEl.width; snap.height = canvasEl.height;
+  snap.getContext("2d").drawImage(canvasEl, 0, 0);
+  return snap;
+}
+
+function saveCanvas() {
+  const link = document.createElement("a");
+  const ts   = new Date().toISOString().replace(/[:.]/g,"-").slice(0,19);
+  link.download = `air_canvas_${ts}.png`;
+  link.href      = canvasEl.toDataURL("image/png");
+  link.click();
+  showToast("Saved as PNG ✓");
+}
+
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+function updateCounters() {
+  document.getElementById("stroke-count").textContent = strokes;
+  document.getElementById("undo-count").textContent   = undoStack.length;
+}
+
+// ── Socket.IO ─────────────────────────────────────────────────────────────
+const socket = io();
+let   lastMode    = null;
+let   fpsTimer    = Date.now();
+let   fpsFrames   = 0;
+let   drawStarted = false;
+
+const camImg   = document.getElementById("cam");
+const modeBadge = document.getElementById("mode-badge");
+const cursorEl  = document.getElementById("cursor");
+const statusDot = document.getElementById("status-dot");
+const statusLbl = document.getElementById("status-label");
+
+socket.on("connect", () => {
+  statusDot.className = "connected";
+  statusLbl.textContent = "connected";
+  showToast("🎨 Connected — show your hand!");
+});
+socket.on("disconnect", () => {
+  statusDot.className = "";
+  statusLbl.textContent = "disconnected";
+});
+
+socket.on("frame", (data) => {
+  // Camera feed
+  camImg.src = "data:image/jpeg;base64," + data.frame;
+
+  // FPS
+  fpsFrames++;
+  const now = Date.now();
+  if (now - fpsTimer >= 1000) {
+    document.getElementById("fps-val").textContent = fpsFrames;
+    fpsFrames = 0; fpsTimer = now;
+  }
+
+  const mode = data.mode;
+  const nx   = data.x;
+  const ny   = data.y;
+
+  // Mode badge
+  if (mode !== lastMode) {
+    modeBadge.textContent = mode || "NONE";
+    modeBadge.className   = "";
+    if (mode) modeBadge.classList.add(mode);
+    lastMode = mode;
+  }
+
+  // Cursor
+  if (nx !== null && ny !== null) {
+    const [px, py] = toPixel(nx, ny);
+    cursorEl.style.display = "block";
+    cursorEl.style.left    = px + "px";
+    cursorEl.style.top     = py + "px";
+    cursorEl.style.width   = (brushSize + 6) + "px";
+    cursorEl.style.height  = (brushSize + 6) + "px";
+
+    if (mode === "DRAW") {
+      if (prevX !== null) {
+        if (!drawStarted) {
+          undoStack.push(createSnapshot());
+          drawStarted = true;
+        }
+        drawStroke(prevX, prevY, px, py);
+      }
+      prevX = px; prevY = py;
+    } else if (mode === "ERASE") {
+      eraseAt(px, py);
+      prevX = null; prevY = null;
+    } else if (mode === "UNDO") {
+      undoStroke();
+      prevX = null; prevY = null;
+    } else if (mode === "CLEAR") {
+      clearCanvas();
+      prevX = null; prevY = null;
+    } else {
+      if (drawStarted) { strokes++; updateCounters(); drawStarted = false; }
+      prevX = null; prevY = null;
+    }
+
+    // Color advance
+    if (data.color_advance) {
+      const next = (colorIdx + 1) % COLORS.length;
+      setColor(next);
+      showToast("Color → " + COLORS[next].name);
+    }
+  } else {
+    cursorEl.style.display = "none";
+    prevX = null; prevY = null;
+  }
+
+  updateCounters();
+});
+
+// Keyboard shortcuts
+document.addEventListener("keydown", e => {
+  if (e.key === "s" || e.key === "S") saveCanvas();
+  if (e.key === "c" || e.key === "C") clearCanvas();
+  if (e.key === "z" || e.key === "Z") undoStroke();
+  if (e.key === "g" || e.key === "G") {
+    const tog = document.getElementById("glow-toggle");
+    tog.checked = !tog.checked;
+    glowOn = tog.checked;
+    showToast("Glow " + (glowOn ? "ON" : "OFF"));
+  }
+});
+</script>
+</body>
+</html>
