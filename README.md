@@ -32,5 +32,12 @@ Air Canvas is a real-time, touchless drawing application that allows you to pain
 
 ### 1. Clone the Repository
 ```bash
-git clone [https://github.com/yourusername/air-canvas.git](https://github.com/yourusername/air-canvas.git)
+git clone [https://github.com/Freddyz-coder/air-canvas.git](https://github.com/Freddyz-coder/air-canvas.git)
 cd air-canvas
+
+Make sure you have python 3.8+
+pip install opencv-python mediapipe flask flask-socketio
+
+Run the server on cmd
+cd download
+python server.py
